@@ -11,6 +11,7 @@ import {
   fitState,
   JevClient,
   parseJevResponse,
+  questionsFor,
   reductionRatio,
   resolveOptions,
   type HistoryToolCall,
@@ -77,7 +78,7 @@ describe('options', () => {
       keepThreshold: 0.5,
       preserveRecentMessages: 6,
       maxStateTokens: 25_000,
-      maxRequestTokens: 30_000,
+      maxRequestTokens: 60_000,
       truncateHeadChars: 300,
     });
     expect(resolveOptions({
@@ -429,5 +430,33 @@ describe('HTTP client', () => {
     await expect(
       compactMessages(transcript(), { apiKey: '', preserveRecentMessages: 1 }),
     ).rejects.toThrow(/TYPESAFE_API_KEY/);
+  });
+});
+
+describe('jev context limits', () => {
+  const call = (id: string): ToolCall => ({
+    id,
+    tool_use_id: `toolu_${id}`,
+    tool: 'Read',
+    input: { file_path: 'src/a.ts' },
+    callIndex: 1,
+    resultIndex: 2,
+    resultChars: 100,
+    isError: false,
+    pinned: false,
+  });
+
+  it('uses the whole 64k request budget, not 32k', () => {
+    const perCall = estimateTokens(JSON.stringify(questionsFor(call('t1'))));
+    const calls = Array.from({ length: 200 }, (_, i) => call(`t${i + 1}`));
+    const batches = batchCalls(calls, 25_000, { maxRequestTokens: 60_000 });
+    expect(batches).toHaveLength(1);
+    expect(perCall * 200).toBeLessThan(60_000 - 25_000);
+  });
+
+  it('rejects a state that leaves no room for a single question', () => {
+    expect(() => batchCalls([call('t1')], 31_990, { maxRequestTokens: 60_000 })).toThrow(
+      /state plus one question/,
+    );
   });
 });
