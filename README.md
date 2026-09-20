@@ -1,5 +1,22 @@
 # fast-jev-compaction
 
+> **This is a combined fork, not upstream.** It is `tamaratran/fast-jev-compaction@main`
+> plus two changes that are still open upstream:
+>
+> - **[#55](https://github.com/tamaratran/fast-jev-compaction/pull/55)** — lowers the keep
+>   threshold (a Noul of 0.5 means "unsure", not "half"), adds `criteria` to both questions,
+>   and fixes the Jev request budget (60k, with the 32k state-plus-longest-question limit
+>   checked separately).
+> - **[#67](https://github.com/tamaratran/fast-jev-compaction/pull/67)** — gives the tool
+>   *call* its own gate (`keepCallThreshold`, default 0.05) instead of sharing the result's.
+>   Dropping a call is the one decision here that cannot be undone by re-running a tool:
+>   it removes the evidence while leaving the assistant's narration of it standing
+>   ([#65](https://github.com/tamaratran/fast-jev-compaction/issues/65)).
+>
+> Net effect: a result is truncated below `0.15`, but the call itself survives unless Jev is
+> ~95% sure it is spent — so the record of what was done stays intact even when its output
+> does not. Track upstream and drop this fork once both land.
+
 Claude Code plugin that replaces the compaction summary with Jev decisions:
 every tool call and result is scored in one fast request, stale ones are
 dropped or truncated, everything kept stays verbatim. Also usable as an npm
@@ -41,11 +58,16 @@ built-in compaction summary with the original messages.
    **result** stay verbatim (its contents are still needed and re-running the
    tool would not do).
 5. Questions are split into as many requests as needed so state plus questions
-   stays under `maxRequestTokens` (30k by default, under Jev's 32k request
-   limit). The same full state is resent with every request; requests run
-   concurrently and their answers are merged.
-6. Decisions per call. The result is gated by `keepThreshold`, the call by its
-   own, much lower `keepCallThreshold`:
+   stays under `maxRequestTokens` (60k by default, under Jev's 64k per-request
+   limit). Jev's second limit — state plus the single longest question under
+   32k — is checked separately. The same full state is resent with every
+   request, so fewer requests is strictly cheaper; requests run concurrently
+   and their answers are merged.
+6. Decisions per call. A Noul answer of 0.5 is Jev saying it is unsure, and
+   distance from 0.5 is the confidence signal, so both gates sit deliberately
+   low: deleting context cannot be undone, and an uncertain answer should keep.
+   The result is gated by `keepThreshold`, the call by its own, lower
+   `keepCallThreshold`:
    - `keepResult ≥ keepThreshold` → keep call and result;
    - else `keepCall ≥ keepCallThreshold` → keep the call, truncate the result to
      its first `truncateHeadChars` characters plus a one-line note;
@@ -118,11 +140,11 @@ put it in a source file.
 | `baseUrl` | `https://api.typesafe.ai/v1/systemone` | System One endpoint |
 | `fetch` | native `fetch` | Injectable fetch implementation for tests |
 | `goal` | last 3 user prompts | Ongoing task description included in the state |
-| `keepThreshold` | `0.5` | Minimum keep probability for a tool *result* to stay verbatim |
+| `keepThreshold` | `0.15` | Minimum keep probability for a tool *result* to stay verbatim |
 | `keepCallThreshold` | `0.05` | Minimum keep probability for the tool *call* to stay; below it the call goes with its result |
 | `preserveRecentMessages` | `6` | Newest messages never touched (the first is always kept) |
 | `maxStateTokens` | `25000` | Estimated token ceiling for the state |
-| `maxRequestTokens` | `30000` | Estimated ceiling for state plus one batch of questions |
+| `maxRequestTokens` | `60000` | Estimated ceiling for state plus one batch of questions (Jev allows 64k) |
 | `truncateHeadChars` | `300` | Characters of a dropped tool result retained before its note |
 
 `result.stats` reports message and character counts before and after, the
@@ -136,8 +158,9 @@ stage was needed, and the number of requests.
 - Token sizes are estimates from character counts, not a tokenizer.
 - Calibration is at the request level; a probability is not a proof that a
   result is safe to delete. The assistant can always re-run the tool.
-- The full state is repeated with every request, so a history near the state
-  ceiling costs one request per handful of questions.
+- The full state is repeated with every request, and Jev prefills it each time,
+  so the request count dominates the cost. Lowering `maxStateTokens` both
+  shrinks each prefill and leaves more of the 64k budget for questions.
 
 ## Claude Code plugin
 
