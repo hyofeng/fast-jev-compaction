@@ -225,13 +225,34 @@ export function decisionLogLines(
   );
 }
 
-async function getApiKey(
-  $: {
-    env: { get: (name: string) => Promise<string | undefined> };
-    settings: { read: () => Promise<Readonly<Record<string, unknown>>> };
-  },
-  config: HookConfig,
-): Promise<string | undefined> {
+type KeySources = {
+  env: { get: (name: string) => Promise<string | undefined> };
+  settings: { read: () => Promise<Readonly<Record<string, unknown>>> };
+  fs: { exists: (path: string) => Promise<boolean>; read: (path: string) => Promise<string> };
+};
+
+/**
+ * A key file outside any config directory, so the secret can live in exactly
+ * one place instead of being copied into settings.json or a plugin option.
+ *
+ * `$.fs.read` takes an absolute path and does not expand `~`, so HOME is
+ * resolved first. The format is one `TYPESAFE_API_KEY=...` line, matching what
+ * the TypeSafe SDKs read from the environment.
+ */
+async function keyFromFile($: KeySources): Promise<string | undefined> {
+  const explicit = await $.env.get('TYPESAFE_ENV_FILE');
+  const home = await $.env.get('HOME');
+  const path = explicit || (home ? `${home}/.config/typesafe/env` : undefined);
+  if (!path) return undefined;
+  if (!(await $.fs.exists(path))) return undefined;
+  const line = /^[ \t]*(?:export[ \t]+)?TYPESAFE_API_KEY[ \t]*=[ \t]*(.*)$/m.exec(
+    await $.fs.read(path),
+  );
+  const value = line?.[1]?.trim().replace(/^["']|["']$/g, '');
+  return value || undefined;
+}
+
+async function getApiKey($: KeySources, config: HookConfig): Promise<string | undefined> {
   if (config.apiKey) return config.apiKey;
   const fromEnv = await $.env.get('TYPESAFE_API_KEY');
   if (fromEnv) return fromEnv;
@@ -241,7 +262,7 @@ async function getApiKey(
     const value = (env as Record<string, unknown>)['TYPESAFE_API_KEY'];
     if (typeof value === 'string' && value) return value;
   }
-  return undefined;
+  return keyFromFile($);
 }
 
 function notify(

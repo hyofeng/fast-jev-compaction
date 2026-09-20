@@ -13,6 +13,12 @@
 >   it removes the evidence while leaving the assistant's narration of it standing
 >   ([#65](https://github.com/tamaratran/fast-jev-compaction/issues/65)).
 >
+> It also adds one fork-only change: the hook falls back to reading the key from
+> `~/.config/typesafe/env` (or `$TYPESAFE_ENV_FILE`) via `$.fs.read`, after the plugin
+> option, `TYPESAFE_API_KEY`, and `settings.json`. That keeps the secret in one place
+> instead of copying it into a Claude Code config file. `claude plugin validate` lists
+> the access, as it lists every other capability the hook uses.
+>
 > Net effect: a result is truncated below `0.15`, but the call itself survives unless Jev is
 > ~95% sure it is spent — so the record of what was done stays intact even when its output
 > does not. Track upstream and drop this fork once both land.
